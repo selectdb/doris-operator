@@ -53,10 +53,10 @@ func (cn *Controller) Sync(ctx context.Context, dcr *dorisv1.DorisCluster) error
 
 	config, err := cn.GetConfig(ctx, &cnSpec.ConfigMapInfo, dcr.Namespace)
 	if err != nil {
-		klog.Errorf("cn controller sync resolve cn configMap failed, namespace %s configmap %s", dcr.Namespace, dcr.Spec.CnSpec.ConfigMapInfo.ConfigMapName)
+		klog.Errorf("cn controller sync resolve cn configMap failed, namespace %s ，err :", dcr.Namespace, err)
 		return err
 	}
-
+	cn.CheckConfigMountPath(dcr, dorisv1.Component_CN)
 	svc := resource.BuildExternalService(dcr, dorisv1.Component_CN, config)
 	internalSVC := resource.BuildInternalService(dcr, dorisv1.Component_CN, config)
 
@@ -233,13 +233,37 @@ func (cn *Controller) DeleteAutoscaler(ctx context.Context, dcr *dorisv1.DorisCl
 }
 
 func (cn *Controller) GetConfig(ctx context.Context, configMapInfo *dorisv1.ConfigMapInfo, namespace string) (map[string]interface{}, error) {
-	configMap, err := k8s.GetConfigMap(ctx, cn.K8sclient, namespace, configMapInfo.ConfigMapName)
+	cms := resource.GetMountConfigMapInfo(configMapInfo)
+
+	if len(cms) == 0 {
+		return make(map[string]interface{}), nil
+	}
+
+	configMaps, err := k8s.GetConfigMaps(ctx, cn.K8sclient, namespace, cms)
 	if err != nil && apierrors.IsNotFound(err) {
-		klog.Info("cnController GetCnConfig config is not exist namespace ", namespace, " configmapName ", configMapInfo.ConfigMapName)
+		klog.Info("cnController GetCnConfig config is not exist namespace ", namespace)
 		return make(map[string]interface{}), nil
 	} else if err != nil {
 		return make(map[string]interface{}), err
 	}
-	res, err := resource.ResolveConfigMap(configMap, configMapInfo.ResolveKey)
+	res, err := resource.ResolveConfigMaps(configMaps, dorisv1.Component_CN)
+	return res, err
+}
+
+func (cn *Controller) getFeConfig(ctx context.Context, configMapInfo *dorisv1.ConfigMapInfo, namespace string) (map[string]interface{}, error) {
+	cms := resource.GetMountConfigMapInfo(configMapInfo)
+
+	if len(cms) == 0 {
+		return make(map[string]interface{}), nil
+	}
+
+	configMaps, err := k8s.GetConfigMaps(ctx, cn.K8sclient, namespace, cms)
+	if err != nil && apierrors.IsNotFound(err) {
+		klog.Info("CnController GetFeConfig config is not exist namespace ", namespace)
+		return make(map[string]interface{}), nil
+	} else if err != nil {
+		return make(map[string]interface{}), err
+	}
+	res, err := resource.ResolveConfigMaps(configMaps, dorisv1.Component_FE)
 	return res, err
 }
