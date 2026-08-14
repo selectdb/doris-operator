@@ -64,7 +64,10 @@ ${SIGNER_NAME} (${APACHE_ID})
 EOF
 )"
 
-printf '%s\n' "$BODY" > "$body_file"
+{
+  printf 'Subject: %s\n' "$subject"
+  printf '\n%s\n' "$BODY"
+} > "$body_file"
 {
   printf 'To: %s\n' "$VOTE_TO"
   printf 'Subject: %s\n' "$subject"

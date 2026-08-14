@@ -37,6 +37,11 @@ for text in \
   './03-vote-mail.sh' \
   './04-release-complete.sh' \
   '--mail-only' \
+  '--github-only' \
+  '--verify-tag' \
+  'The whole run is idempotent' \
+  'apache/doris:operator-' \
+  'Subject:' \
   'refuses to overwrite' \
   'does not inspect, compare, promote, move, or delete anything under dev SVN' \
   'prints the subject and body' \

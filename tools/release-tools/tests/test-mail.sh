@@ -45,10 +45,13 @@ APACHE_ID="release-manager"
 APACHE_EMAIL="release-manager@apache.org"
 SIGNER_NAME="Release Manager"
 SIGNING_KEY="0123456789ABCDEF0123456789ABCDEF01234567"
+GITHUB_REPO="apache-test/doris-operator"
 GITHUB_TAG_URL="https://github.example.test/apache/doris-operator/releases/tag/\${TAG}"
 RELEASE_NOTES_URL="https://github.example.test/apache/doris-operator/releases/notes/\${TAG}"
 VERIFY_GUIDE_URL="https://doris.example.test/release-verify"
 DOWNLOAD_PAGE_URL="https://github.example.test/apache/doris-operator/releases/tag/\${TAG}"
+DOCKER_IMAGE="apache/doris:operator-\${VERSION}"
+DOCKER_IMAGE_URL="https://hub.example.test/r/apache/doris/tags?name=operator-\${VERSION}"
 VOTE_TO="dev@example.test"
 ANNOUNCE_TO="announce@example.test"
 WORK_DIR="${tmp}/work"
@@ -74,6 +77,7 @@ vote_eml="${tmp}/work/vote-email.eml"
 assert_exists "$vote_body"
 assert_exists "$vote_eml"
 assert_file_contains "$vote_eml" "Subject: [VOTE] Release Apache Doris Operator 9.9.9"
+assert_eq "Subject: [VOTE] Release Apache Doris Operator 9.9.9" "$(head -n 1 "$vote_body")"
 assert_file_contains "$vote_body" "https://github.example.test/apache/doris-operator/releases/tag/9.9.9"
 assert_file_contains "$vote_body" "https://dist.example.test/dev/doris/doris-operator/9.9.9/"
 assert_file_contains "$vote_body" "0123456789ABCDEF0123456789ABCDEF01234567"
@@ -91,14 +95,22 @@ assert_exists "$announce_body"
 assert_exists "$announce_eml"
 assert_file_contains "$announce_eml" "To: announce@example.test"
 assert_file_contains "$announce_eml" "Subject: [ANNOUNCE] Apache Doris Operator 9.9.9 release"
+assert_eq "Subject: [ANNOUNCE] Apache Doris Operator 9.9.9 release" "$(head -n 1 "$announce_body")"
+assert_file_contains "${tmp}/announce-output" "Subject: [ANNOUNCE] Apache Doris Operator 9.9.9 release"
 assert_file_contains "$announce_body" "automates the deployment and management"
 assert_file_contains "$announce_body" "https://dist.example.test/release/doris/doris-operator/9.9.9/apache-doris-operator-9.9.9-src.tar.gz"
 assert_file_contains "$announce_body" "Thank you to everyone"
-assert_file_contains "${tmp}/announce-output" "mail-only mode: skipping tag, package, signing, and SVN operations"
+assert_file_contains "${tmp}/announce-output" "mail-only mode: skipping tag, package, signing, SVN, and GitHub operations"
+assert_not_exists "${tmp}/work/github-release-notes.md"
 [[ ! -s "$COMMAND_LOG" ]] || fail "--mail-only invoked an external release command"
 
 if PATH="${tmp}/fake-bin:${PATH}" "${tool_copy}/04-release-complete.sh" --unknown >/dev/null 2>&1; then
   fail "04-release-complete.sh accepted an unknown argument"
+fi
+
+if PATH="${tmp}/fake-bin:${PATH}" "${tool_copy}/04-release-complete.sh" \
+  --mail-only --github-only >/dev/null 2>&1; then
+  fail "04-release-complete.sh accepted --mail-only together with --github-only"
 fi
 
 pass

@@ -76,7 +76,7 @@ validate_release_config() {
   )
 
   if [[ "$mode" != "mail" ]]; then
-    required+=(REPO_DIR GIT_REMOTE)
+    required+=(REPO_DIR GIT_REMOTE GITHUB_REPO DOCKER_IMAGE DOCKER_IMAGE_URL)
   fi
 
   for name in "${required[@]}"; do
@@ -96,6 +96,10 @@ validate_release_config() {
 
   if [[ "$mode" != "mail" ]]; then
     [[ "$REPO_DIR" == /* ]] || die "release.env: REPO_DIR must be an absolute path"
+    [[ "$GITHUB_REPO" == */* && "$GITHUB_REPO" != */*/* ]] ||
+      die "release.env: GITHUB_REPO must be <owner>/<repo>"
+    [[ "$DOCKER_IMAGE" == *:*"${VERSION}" ]] ||
+      die "release.env: DOCKER_IMAGE must be a <image>:<tag> ending with ${VERSION}"
   fi
 }
 
@@ -231,6 +235,33 @@ build_svn_auth_args() {
 svn_url_exists() {
   local url="$1"
   svn info "${SVN_AUTH_ARGS[@]}" "$url" >/dev/null 2>&1
+}
+
+# Prints the publication state of an SVN version directory, so a workflow can
+# tell an interrupted upload from a finished one and re-run safely:
+#   missing   the directory does not exist yet
+#   complete  the directory exists and holds every expected file name
+#   partial   the directory exists but at least one expected file is absent
+svn_version_dir_state() {
+  local url="$1"
+  shift
+  local listing name
+  [[ "$#" -gt 0 ]] || die "no file names supplied for SVN inspection"
+
+  build_svn_auth_args
+  if ! svn_url_exists "$url"; then
+    printf 'missing\n'
+    return 0
+  fi
+
+  listing="$(svn ls "${SVN_AUTH_ARGS[@]}" "$url" 2>/dev/null || true)"
+  for name in "$@"; do
+    if ! printf '%s\n' "$listing" | grep -Fxq "$name"; then
+      printf 'partial\n'
+      return 0
+    fi
+  done
+  printf 'complete\n'
 }
 
 stage_and_commit_version_dir() {

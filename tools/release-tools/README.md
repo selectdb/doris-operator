@@ -20,16 +20,16 @@ under the License.
 # Doris Operator release tools
 
 These scripts package, sign, and publish Apache Doris Operator source releases.
-They publish source artifacts only and generate vote and announcement email
-drafts. They do not create Git tags or send email.
-
-The checked-in defaults target version and Git tag `26.0.0`.
+They publish source artifacts only, turn the released Git tag into a GitHub
+release, and generate vote and announcement email drafts. They do not create
+Git tags or send email.
 
 ## Prerequisites
 
-Install `git`, `gpg`, `svn`, `svnmucc`, `sha512sum`, `curl`, and `gzip`. The
-selected Git tag must already exist locally and on the remote configured by
-`GIT_REMOTE`.
+Install `git`, `gpg`, `svn`, `svnmucc`, `sha512sum`, `curl`, `gzip`, and `gh`.
+The selected Git tag must already exist locally and on the remote configured by
+`GIT_REMOTE`. `gh` must be authenticated for `GITHUB_REPO` (`gh auth login`, or
+export `GH_TOKEN`); it is used only by step 4.
 
 Edit `release.env` before each release. In particular, verify:
 
@@ -37,6 +37,8 @@ Edit `release.env` before each release. In particular, verify:
 - `APACHE_ID`, `APACHE_EMAIL`, and `SIGNER_NAME`.
 - `SIGNING_KEY`: required full fingerprint of a locally available secret key.
 - release notes, verification, download, and mailing-list URLs.
+- `GITHUB_REPO`, plus `DOCKER_IMAGE` and `DOCKER_IMAGE_URL` for the operator
+  image published with this release, for example `apache/doris:operator-26.0.1`.
 - `WORK_DIR`, which stores generated artifacts, SVN working copies, and drafts.
 
 `TAG` must be the final version with no RC suffix. Source artifacts and SVN
@@ -112,6 +114,9 @@ asks for confirmation both before staging and before commit.
 This writes `vote-email.txt` and `vote-email.eml` under `WORK_DIR`.
 It prints the subject and body, then leaves sending to the release manager.
 
+Both vote and announcement drafts start with a `Subject:` line followed by a
+blank line, so the mail title never has to be retyped.
+
 ### 4. Complete a passed release
 
 ```bash
@@ -129,8 +134,33 @@ https://dist.apache.org/repos/dist/release/doris/doris-operator/<version>/
 
 It does not inspect, compare, promote, move, or delete anything under dev SVN.
 It refuses to overwrite an existing release directory and requires two
-confirmations. Only after a successful commit does it create
-`announce-email.txt` and `announce-email.eml`.
+confirmations.
+
+Once the release files are in release SVN, the script turns the existing Git
+tag into a GitHub release on `GITHUB_REPO`. The notes are written to
+`github-release-notes.md` under `WORK_DIR`, printed for review, and published
+with `gh` after one more confirmation. They link the release-note issue
+(`RELEASE_NOTES_URL`), the operator image (`DOCKER_IMAGE`, for example
+`apache/doris:operator-26.0.1`, with its `docker pull` command and
+`DOCKER_IMAGE_URL`), and the formal source artifacts. `gh release create` runs
+with `--verify-tag`, so it publishes the existing tag and never creates one.
+
+Finally the script writes `announce-email.txt` and `announce-email.eml`.
+
+The whole run is idempotent, so an interrupted release can simply be repeated:
+
+- release files already present in release SVN are detected by name, and
+  packaging, signing, and the SVN commit are skipped;
+- a release directory holding only some of the three files is reported as
+  incomplete and stops the run for manual repair;
+- an existing GitHub release whose notes already match is left untouched, and
+  differing notes are replaced only after an explicit confirmation.
+
+To publish or refresh only the GitHub release:
+
+```bash
+./04-release-complete.sh --github-only
+```
 
 To regenerate only the announcement drafts:
 
@@ -138,16 +168,19 @@ To regenerate only the announcement drafts:
 ./04-release-complete.sh --mail-only
 ```
 
-`--mail-only` skips Git, packaging, GPG, checksums, and SVN.
+`--github-only` skips packaging, GPG, checksums, SVN, and the mail drafts.
+`--mail-only` skips Git, packaging, GPG, checksums, SVN, and GitHub.
 
 ## Safety boundaries
 
-- No script creates, updates, or pushes a Git tag.
+- No script creates, updates, or pushes a Git tag; the GitHub release is
+  published from the existing tag with `gh release create --verify-tag`.
 - Local and remote tags are compared by peeled commit ID.
 - Generated signatures and checksums are verified immediately.
 - Dev and release uploads stop before checkout if the version directory exists.
 - SVN target URLs and staged files are shown before both confirmations.
 - SVN uploads contain only the source archive, signature, and checksum.
+- Existing GitHub release notes are replaced only after a confirmation.
 - Public emails are drafts only.
 - No email was sent by any script; the release manager sends drafts manually.
 - Formal release packaging is independent from dev SVN.
