@@ -247,6 +247,14 @@ type BaseSpec struct {
 	// +patchStrategy=merge
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty" patchStrategy:"merge" patchMergeKey:"name" protobuf:"bytes,15,rep,name=imagePullSecrets"`
 
+	// ImagePullPolicy is the pull policy for the component's container. Defaults to IfNotPresent.
+	// Set it to Always when the image is referenced by a mutable tag, since a node that has already
+	// cached that tag will otherwise keep running the image it pulled first.
+	// More info: https://kubernetes.io/docs/concepts/containers/images#updating-images
+	// +optional
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
 	//the reference for cn configMap.
 	//+optional
 	ConfigMapInfo ConfigMapInfo `json:"configMapInfo,omitempty"`

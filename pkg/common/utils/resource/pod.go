@@ -547,6 +547,11 @@ func NewBaseMainContainer(dcr *v1.DorisCluster, config map[string]interface{}, c
 		volumeMounts = append(volumeMounts, sharedVolumeMounts...)
 	}
 
+	imagePullPolicy := corev1.PullIfNotPresent
+	if spec.ImagePullPolicy != "" {
+		imagePullPolicy = spec.ImagePullPolicy
+	}
+
 	c := corev1.Container{
 		Image:           spec.Image,
 		Name:            string(componentType),
@@ -555,7 +560,7 @@ func NewBaseMainContainer(dcr *v1.DorisCluster, config map[string]interface{}, c
 		Ports:           []corev1.ContainerPort{},
 		Env:             envs,
 		VolumeMounts:    volumeMounts,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		ImagePullPolicy: imagePullPolicy,
 		Resources:       spec.ResourceRequirements,
 	}
 

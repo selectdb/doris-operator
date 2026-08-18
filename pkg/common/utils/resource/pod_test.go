@@ -134,6 +134,23 @@ func Test_NewBaseMainContainer(t *testing.T) {
 	}
 }
 
+func Test_NewBaseMainContainer_ImagePullPolicy(t *testing.T) {
+	// Unset keeps the previous behaviour, so existing clusters are unaffected by the new field.
+	for _, dct := range []v1.ComponentType{v1.Component_FE, v1.Component_BE, v1.Component_CN, v1.Component_Broker} {
+		c := NewBaseMainContainer(dcr, cm, dct)
+		if c.ImagePullPolicy != corev1.PullIfNotPresent {
+			t.Errorf("%s: default imagePullPolicy = %q, want %q", dct, c.ImagePullPolicy, corev1.PullIfNotPresent)
+		}
+	}
+
+	always := dcr.DeepCopy()
+	always.Spec.FeSpec.ImagePullPolicy = corev1.PullAlways
+	c := NewBaseMainContainer(always, cm, v1.Component_FE)
+	if c.ImagePullPolicy != corev1.PullAlways {
+		t.Errorf("imagePullPolicy = %q, want %q", c.ImagePullPolicy, corev1.PullAlways)
+	}
+}
+
 func Test_LifeCycleWithPreStopScript(t *testing.T) {
 	lcs := []*corev1.Lifecycle{nil, {}}
 	for i, _ := range lcs {
