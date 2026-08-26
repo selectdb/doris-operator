@@ -157,11 +157,16 @@ func New(mgr ctrl.Manager) *DisaggregatedMSController {
 
 func (dms *DisaggregatedMSController) Sync(ctx context.Context, obj client.Object) error {
 	ddc := obj.(*v1.DorisDisaggregatedCluster)
+	fdbEndpoint, err := dms.resolveFDBEndpoint(ctx, ddc)
+	if err != nil {
+		dms.K8srecorder.Event(ddc, string(sc.EventWarning), string(sc.FDBAddressNotConfiged), err.Error())
+		return err
+	}
 	msSpec := ddc.Spec.MetaService
 	confMap := dms.GetConfigValuesFromConfigMaps(ddc.Namespace, resource.MS_RESOLVEKEY, msSpec.ConfigMaps)
 	svc := dms.newService(ddc, confMap)
 
-	st := dms.newStatefulset(ddc, confMap)
+	st := dms.newStatefulset(ddc, confMap, fdbEndpoint)
 	dms.initMSStatus(ddc)
 
 	dms.CheckSecretMountPath(ddc, ddc.Spec.MetaService.Secrets)

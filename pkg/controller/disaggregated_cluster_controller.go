@@ -61,12 +61,9 @@ type DisaggregatedClusterReconciler struct {
 	Recorder record.EventRecorder
 	Scheme   *runtime.Scheme
 	Scs      map[string]sc.DisaggregatedSubController
-	//record configmap response instance. key: configMap namespacedName, value: DorisDisaggregatedCluster namespacedName
-	//wcms map[string]string
 }
 
 func (dc *DisaggregatedClusterReconciler) Init(mgr ctrl.Manager, options *Options) {
-	//wcms := make(map[string]string)
 	scs := make(map[string]sc.DisaggregatedSubController)
 	msc := metaservice.New(mgr)
 	scs[msc.GetControllerName()] = msc
@@ -80,7 +77,6 @@ func (dc *DisaggregatedClusterReconciler) Init(mgr ctrl.Manager, options *Option
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorderFor(disaggregatedClusterController),
 		Scs:      scs,
-		//wcms:     wcms,
 	}).SetupWithManager(mgr); err != nil {
 		klog.Error(err, "unable to create controller ", "disaggregatedClusterReconciler")
 		os.Exit(1)
@@ -97,7 +93,7 @@ func (dc *DisaggregatedClusterReconciler) Init(mgr ctrl.Manager, options *Option
 func (dc *DisaggregatedClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := dc.resourceBuilder(ctrl.NewControllerManagedBy(mgr))
 	builder = dc.watchPodBuilder(builder)
-	//builder = dc.watchConfigMapBuilder(builder)
+	builder = dc.watchFDBConfigMapBuilder(builder)
 	return builder.Complete(dc)
 }
 
@@ -146,41 +142,65 @@ func (dc *DisaggregatedClusterReconciler) watchPodBuilder(builder *ctrl.Builder)
 		mapFn, controller_builder.WithPredicates(p))
 }
 
-//func (dc *DisaggregatedClusterReconciler) watchConfigMapBuilder(builder *ctrl.Builder) *ctrl.Builder {
-//	mapFn := handler.EnqueueRequestsFromMapFunc(
-//		func(a client.Object) []reconcile.Request {
-//			namespace := a.GetNamespace()
-//			name := a.GetName()
-//			cmnn := types.NamespacedName{Namespace: namespace, Name: name}
-//			cmnnStr := cmnn.String()
-//			if ddc, ok := dc.wcms[cmnnStr]; ok {
-//				nna := strings.Split(ddc, "/")
-//				// not run only for code standard
-//				if len(nna) != 2 {
-//					return nil
-//				}
-//
-//				return []reconcile.Request{{NamespacedName: types.NamespacedName{
-//					Namespace: nna[0],
-//					Name:      nna[1],
-//				}}}
-//			}
-//			return nil
-//		})
-//
-//	p := predicate.Funcs{
-//		UpdateFunc: func(u event.UpdateEvent) bool {
-//			ns := u.ObjectNew.GetNamespace()
-//			name := u.ObjectNew.GetName()
-//			nsn := ns + "/" + name
-//			_, ok := dc.wcms[nsn]
-//			return ok
-//		},
-//	}
-//
-//	return builder.Watches(&source.Kind{Type: &corev1.ConfigMap{}},
-//		mapFn, controller_builder.WithPredicates(p))
-//}
+func (dc *DisaggregatedClusterReconciler) watchFDBConfigMapBuilder(builder *ctrl.Builder) *ctrl.Builder {
+	mapFn := handler.EnqueueRequestsFromMapFunc(dc.mapFDBConfigMapToDDCs)
+	return builder.Watches(&corev1.ConfigMap{}, mapFn, controller_builder.WithPredicates(fdbConfigMapPredicate()))
+}
+
+func fdbConfigMapPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			_, ok := fdbClusterFile(e.Object)
+			return ok
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldValue, oldOK := fdbClusterFile(e.ObjectOld)
+			newValue, newOK := fdbClusterFile(e.ObjectNew)
+			return oldOK != newOK || oldValue != newValue
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			_, ok := fdbClusterFile(e.Object)
+			return ok
+		},
+		GenericFunc: func(event.GenericEvent) bool {
+			return false
+		},
+	}
+}
+
+func (dc *DisaggregatedClusterReconciler) mapFDBConfigMapToDDCs(ctx context.Context, obj client.Object) []reconcile.Request {
+	var ddcList dv1.DorisDisaggregatedClusterList
+	if err := dc.List(ctx, &ddcList); err != nil {
+		klog.Errorf("list DorisDisaggregatedClusters for FDB ConfigMap %s/%s failed: %s", obj.GetNamespace(), obj.GetName(), err.Error())
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for i := range ddcList.Items {
+		ddc := &ddcList.Items[i]
+		if ddc.Spec.MetaService.FDB.Address != "" {
+			continue
+		}
+		ref := ddc.Spec.MetaService.FDB.ConfigMapNamespaceName
+		if ref.Namespace == obj.GetNamespace() && ref.Name == obj.GetName() {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: ddc.Namespace,
+				Name:      ddc.Name,
+			}})
+		}
+	}
+
+	return requests
+}
+
+func fdbClusterFile(obj client.Object) (string, bool) {
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		return "", false
+	}
+	value, ok := cm.Data[metaservice.FDBClusterFileKey]
+	return value, ok
+}
 
 func (dc *DisaggregatedClusterReconciler) resourceBuilder(builder *ctrl.Builder) *ctrl.Builder {
 	return builder.For(&dv1.DorisDisaggregatedCluster{}).

@@ -19,6 +19,7 @@ package metaservice
 
 import (
 	"context"
+	"fmt"
 
 	v1 "github.com/apache/doris-operator/api/disaggregated/v1"
 	"github.com/apache/doris-operator/pkg/common/utils/k8s"
@@ -32,9 +33,11 @@ import (
 
 const (
 	defaultLogPrefixName = "log"
-	fdbClusterFileKey    = "cluster-file"
 	//DefaultStorageSize   int64 = 107374182400
 )
+
+// FDBClusterFileKey is the key used by fdb-kubernetes-operator for the cluster file.
+const FDBClusterFileKey = "cluster-file"
 
 func (dms *DisaggregatedMSController) newMSPodsSelector(ddcName string) map[string]string {
 	return map[string]string{
@@ -51,7 +54,7 @@ func (dms *DisaggregatedMSController) newMSSchedulerLabels(ddcName string) map[s
 	}
 }
 
-func (dms *DisaggregatedMSController) newStatefulset(ddc *v1.DorisDisaggregatedCluster, confMap map[string]interface{}) *appv1.StatefulSet {
+func (dms *DisaggregatedMSController) newStatefulset(ddc *v1.DorisDisaggregatedCluster, confMap map[string]interface{}, fdbEndpoint string) *appv1.StatefulSet {
 	st := dms.NewDefaultStatefulset(ddc)
 	func() {
 		st.Name = ddc.GetMSStatefulsetName()
@@ -71,7 +74,7 @@ func (dms *DisaggregatedMSController) newStatefulset(ddc *v1.DorisDisaggregatedC
 		st.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: matchLabels,
 		}
-		st.Spec.Template = dms.NewPodTemplateSpec(ddc, matchLabels, confMap)
+		st.Spec.Template = dms.NewPodTemplateSpec(ddc, matchLabels, confMap, fdbEndpoint)
 		st.Spec.ServiceName = ddc.GetMSServiceName()
 		st.Spec.VolumeClaimTemplates = vcts
 	}()
@@ -79,7 +82,7 @@ func (dms *DisaggregatedMSController) newStatefulset(ddc *v1.DorisDisaggregatedC
 	return st
 }
 
-func (dms *DisaggregatedMSController) NewPodTemplateSpec(ddc *v1.DorisDisaggregatedCluster, selector map[string]string, confMap map[string]interface{}) corev1.PodTemplateSpec {
+func (dms *DisaggregatedMSController) NewPodTemplateSpec(ddc *v1.DorisDisaggregatedCluster, selector map[string]string, confMap map[string]interface{}, fdbEndpoint string) corev1.PodTemplateSpec {
 	pts := resource.NewPodTemplateSpecWithCommonSpec(false, &ddc.Spec.MetaService.CommonSpec, v1.DisaggregatedMS)
 	//pod template metadata.
 	func() {
@@ -88,7 +91,7 @@ func (dms *DisaggregatedMSController) NewPodTemplateSpec(ddc *v1.DorisDisaggrega
 		pts.Labels = l
 	}()
 
-	c := dms.NewMSContainer(ddc, confMap)
+	c := dms.NewMSContainer(ddc, confMap, fdbEndpoint)
 	pts.Spec.Containers = append(pts.Spec.Containers, c)
 	vs, _, _ := dms.BuildVolumesVolumeMountsAndPVCs(confMap, v1.DisaggregatedMS, &ddc.Spec.MetaService.CommonSpec)
 	configVolumes, _ := dms.BuildDefaultConfigMapVolumesVolumeMounts(ddc.Spec.MetaService.ConfigMaps)
@@ -104,7 +107,7 @@ func (dms *DisaggregatedMSController) NewPodTemplateSpec(ddc *v1.DorisDisaggrega
 	return pts
 }
 
-func (dms *DisaggregatedMSController) NewMSContainer(ddc *v1.DorisDisaggregatedCluster, cvs map[string]interface{}) corev1.Container {
+func (dms *DisaggregatedMSController) NewMSContainer(ddc *v1.DorisDisaggregatedCluster, cvs map[string]interface{}, fdbEndpoint string) corev1.Container {
 	c := resource.NewContainerWithCommonSpec(&ddc.Spec.MetaService.CommonSpec)
 
 	c.Lifecycle = resource.LifeCycleWithPreStopScript(c.Lifecycle, sc.GetDisaggregatedPreStopScript(v1.DisaggregatedMS))
@@ -117,7 +120,7 @@ func (dms *DisaggregatedMSController) NewMSContainer(ddc *v1.DorisDisaggregatedC
 	c.Ports = resource.GetDisaggregatedContainerPorts(cvs, v1.DisaggregatedMS)
 	c.Env = ddc.Spec.MetaService.CommonSpec.EnvVars
 	c.Env = append(c.Env, resource.GetPodDefaultEnv()...)
-	c.Env = append(c.Env, dms.newSpecificEnvs(ddc)...)
+	c.Env = append(c.Env, dms.newSpecificEnvs(fdbEndpoint)...)
 	resource.BuildDisaggregatedProbe(&c, &ddc.Spec.MetaService.CommonSpec, v1.DisaggregatedMS)
 	_, vms, _ := dms.BuildVolumesVolumeMountsAndPVCs(cvs, v1.DisaggregatedMS, &ddc.Spec.MetaService.CommonSpec)
 	_, cmvms := dms.BuildDefaultConfigMapVolumesVolumeMounts(ddc.Spec.MetaService.ConfigMaps)
@@ -136,36 +139,29 @@ func (dms *DisaggregatedMSController) NewMSContainer(ddc *v1.DorisDisaggregatedC
 	return c
 }
 
-func (dms *DisaggregatedMSController) newSpecificEnvs(ddc *v1.DorisDisaggregatedCluster) []corev1.EnvVar {
+func (dms *DisaggregatedMSController) resolveFDBEndpoint(ctx context.Context, ddc *v1.DorisDisaggregatedCluster) (string, error) {
 	msSpec := ddc.Spec.MetaService
-	if msSpec.FDB.Address == "" && (msSpec.FDB.ConfigMapNamespaceName.Namespace == "" || msSpec.FDB.ConfigMapNamespaceName.Name == "") {
-		dms.K8srecorder.Event(ddc, string(sc.EventWarning), string(sc.FDBAddressNotConfiged), "fdb not configed in spec")
-		return nil
-	}
-
-	var fdbEndpoint string
-	if msSpec.FDB.ConfigMapNamespaceName.Namespace != "" && msSpec.FDB.ConfigMapNamespaceName.Name != "" {
-		cm, err := k8s.GetConfigMap(context.Background(), dms.K8sclient, msSpec.FDB.ConfigMapNamespaceName.Namespace, msSpec.FDB.ConfigMapNamespaceName.Name)
-		if err != nil {
-			dms.K8srecorder.Event(ddc, string(sc.EventWarning), string(sc.FDBAddressNotConfiged), "configmap "+"namespace"+msSpec.FDB.ConfigMapNamespaceName.Namespace+" name "+msSpec.FDB.ConfigMapNamespaceName.Name+" find failed "+err.Error())
-			return nil
-		}
-
-		if cm.Data == nil {
-			dms.K8srecorder.Event(ddc, string(sc.EventWarning), string(sc.FDBAddressNotConfiged), "configmap  "+"namespace"+msSpec.FDB.ConfigMapNamespaceName.Namespace+" name "+msSpec.FDB.ConfigMapNamespaceName.Name+" not have data.")
-			return nil
-		}
-
-		if _, ok := cm.Data[fdbClusterFileKey]; !ok {
-			dms.K8srecorder.Event(ddc, string(sc.EventWarning), string(sc.FDBAddressNotConfiged), "configmap  "+"namespace"+msSpec.FDB.ConfigMapNamespaceName.Namespace+" name "+msSpec.FDB.ConfigMapNamespaceName.Name+" not have cluster-file")
-			return nil
-		}
-		fdbEndpoint = cm.Data[fdbClusterFileKey]
-	}
 	if msSpec.FDB.Address != "" {
-		fdbEndpoint = msSpec.FDB.Address
+		return msSpec.FDB.Address, nil
 	}
 
+	ref := msSpec.FDB.ConfigMapNamespaceName
+	if ref.Namespace == "" || ref.Name == "" {
+		return "", fmt.Errorf("FDB address or ConfigMap reference is not configured")
+	}
+
+	cm, err := k8s.GetConfigMap(ctx, dms.K8sclient, ref.Namespace, ref.Name)
+	if err != nil {
+		return "", fmt.Errorf("get FDB ConfigMap %s/%s: %w", ref.Namespace, ref.Name, err)
+	}
+	fdbEndpoint, ok := cm.Data[FDBClusterFileKey]
+	if !ok || fdbEndpoint == "" {
+		return "", fmt.Errorf("FDB ConfigMap %s/%s does not contain a non-empty %q", ref.Namespace, ref.Name, FDBClusterFileKey)
+	}
+	return fdbEndpoint, nil
+}
+
+func (dms *DisaggregatedMSController) newSpecificEnvs(fdbEndpoint string) []corev1.EnvVar {
 	return []corev1.EnvVar{{
 		Name:  resource.FDB_ENDPOINT,
 		Value: fdbEndpoint,
